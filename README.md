@@ -101,6 +101,7 @@ Execute Stage 1.3. Train-char-embeddings, which would output 3 char embeddings u
 
 #### Fine-tune the cls vector of BERT with noisy labels (LB 0.880)
 
+* Run `hanshan/prep_pseudo_labels.py`
 * Run script `hanshan/bert/train_wsdm_pl.sh`
 
 #### Ensemble the predictions of fine-tuned base models (LB 0.879)

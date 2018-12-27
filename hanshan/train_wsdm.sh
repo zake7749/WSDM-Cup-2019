@@ -14,8 +14,8 @@ python train_wsdm.py reproduce_bert --data_dir ../zake7749/data/dataset \
                 --seed 42 \
                 --gradient_accumulation_steps 1 \
                 --do_test \
-                --subset 160 \
-                --dev_subset 80 \
+                #--subset 160 \
+                #--dev_subset 80 \
                 #--no_cuda
                 #--do_eval \
                 #--fp16 \

@@ -271,11 +271,11 @@ def main():
         model = torch.nn.DataParallel(model)
 
     # For resuming training
-    saver = Saver(ckpt_dir='/home/ikmlab/hanshan/bert/data/wsdm/PseudoFirstLevel')
+    saver = Saver(ckpt_dir='../zake7749/data/bert/reproduce_bert')
     # definitely load KZ's weights now
     saver.load(model, 'PseudoFirstLevel', False, load_optimizer=False)
     # reset the saver to save in the new location
-    saver = Saver(ckpt_dir='/home/ikmlab/hanshan/bert/data/wsdm/FOR_KZ')
+    saver = Saver(ckpt_dir=args.output_dir)
 
     # Prepare optimizer
     if args.fp16:

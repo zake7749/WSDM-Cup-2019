@@ -7,6 +7,8 @@ import torch
 import random
 import pickle
 import numpy as np
+import torch.nn.functional as F
+import pandas as pd
 from tqdm import tqdm, trange
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, \
     SequentialSampler
@@ -347,7 +349,7 @@ def main():
     #    batch_size=args.eval_batch_size)
 
     # test
-    test_examples = processor.get_test_examples(args.data_dir)[0:80]
+    test_examples = processor.get_test_examples(args.data_dir)
     ids = [x.guid for x in test_examples]
     test_features = convert_examples_to_features(
         test_examples, label_list, args.max_seq_length, tokenizer)
@@ -430,6 +432,8 @@ def main():
                     model.zero_grad()
                     global_step += 1
 
+    saver.save(model, 'PseudoFirstLevel', is_best=True)
+
     #
     # TEST
 
@@ -445,14 +449,16 @@ def main():
                 with torch.no_grad():
                     logits = model(
                         input_ids, segment_ids, input_mask, None)
-                preds += list(logits.max(1)[1].detach().cpu().numpy())
+                probs = F.softmax(logits, dim=1).detach().cpu().numpy()
+                probs.shape = (logits.size(0), 3)
+                preds.append(probs)
                 pbar.update()
 
         output_test_file = '../zake7749/data/bert/bert.csv'
-        with open(output_test_file, 'w') as writer:
-            writer.write('Id,Category\n')
-            for i, guid in enumerate(ids):
-                writer.write('%s,%s\n' % (guid, rev_label_dict[preds[i]]))
+        preds = np.concatenate(preds, axis=0)
+        df = pd.DataFrame(preds, columns=processor.get_labels())
+        print(df.head())
+        df.to_csv(output_test_file, index=False)
         logger.info('Test completed.')
 
 
