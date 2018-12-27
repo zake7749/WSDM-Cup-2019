@@ -35,11 +35,12 @@ And put these two embeddings under the folder `zake7749/data/wordvec/`
 
 ### 2. Instructions
 
+The notebooks are under the folder `zake7749/code`
 
 #### Pre-processing
 
-1. Execute Stage 1.1. Preprocessing-on-word-level.ipynb 
-2. Execute Stage 1.2. Preprocessing-on-char-level.ipynb
+1. Execute `Stage 1.1. Preprocessing-on-word-level.ipynb`
+2. Execute `Stage 1.2. Preprocessing-on-char-level.ipynb`
 
 These notebooks would generate 8 cleaned datasets under `zake7749/data/processed_dataset`. 
 
@@ -58,7 +59,7 @@ These notebooks would generate 8 cleaned datasets under `zake7749/data/processed
 
 #### Train the char-level embedding
 
-Execute Stage 1.3. Train-char-embeddings, which would output 3 char embeddings under `zake7749/data/wordvec/`
+Execute `Stage 1.3. Train-char-embeddings`, which would output 3 char embeddings under `zake7749/data/wordvec/`
 
 ```
 |-- wordvec
@@ -71,16 +72,16 @@ Execute Stage 1.3. Train-char-embeddings, which would output 3 char embeddings u
 
 #### Train the base models (LB 0.84 ~ 0.86)
 
-* Execute Stage 2. First-Level-with-char-level.ipynb
-* Execute Stage 2. First-Level-with-word-level.ipynb
+* Execute `Stage 2. First-Level-with-char-level.ipynb`
+* Execute `Stage 2. First-Level-with-word-level.ipynb`
 
 #### Ensemble the predictions of base models (LB 0.873)
 
-1. Execute Stage 3.1. First-level-ensemble-ridge-regression
-2. Execute Stage 3.2. First-level-ensemble-with-LGBM-each-side
-3. Execute Stage 3.3. First-level-ensemble-with-LGBM
-4. Execute Stage 3.4. First-level-ensemble-with-NN
-5. Execute Stage 3.5. Second-level-ensemble
+1. Execute `Stage 3.1. First-level-ensemble-ridge-regression`
+2. Execute `Stage 3.2. First-level-ensemble-with-LGBM-each-side`
+3. Execute `Stage 3.3. First-level-ensemble-with-LGBM`
+4. Execute `Stage 3.4. First-level-ensemble-with-NN`
+5. Execute `Stage 3.5. Second-level-ensemble`
 
 #### Fine-tune the cls vector of BERT (LB 0.867)
 
@@ -88,16 +89,16 @@ Execute Stage 1.3. Train-char-embeddings, which would output 3 char embeddings u
 
 #### Blend the predictions of ensemble NNs with BERT (LB 0.874)
 
-* Execute Stage 3.6. Bagging-with-BERT
+* Execute `Stage 3.6. Bagging-with-BERT`
 
 ** Note: Please change the path of sec_stacking_df to the corresponding file **
 
 #### Fine-tune the base models with noisy labels (LB 0.86 ~ 0.875)
 
-* Execute Stage 4.1. Fine-tune-word-levels.ipynb
-* Execute Stage 4.2. Fine-tune-word-levels-ScaleValid.ipynb
-* Execute Stage 4.3. Fine-tune-char-levels.ipynb
-* Execute Stage 4.4. Fine-tune-char-levels-ScaleValid.ipynb
+* Execute `Stage 4.1. Fine-tune-word-levels.ipynb`
+* Execute `Stage 4.2. Fine-tune-word-levels-ScaleValid.ipynb`
+* Execute `Stage 4.3. Fine-tune-char-levels.ipynb`
+* Execute `Stage 4.4. Fine-tune-char-levels-ScaleValid.ipynb`
 
 #### Fine-tune the cls vector of BERT with noisy labels (LB 0.880)
 
@@ -106,14 +107,14 @@ Execute Stage 1.3. Train-char-embeddings, which would output 3 char embeddings u
 
 #### Ensemble the predictions of fine-tuned base models (LB 0.879)
 
-1. Execute Stage 5.1. First-level-fine-tuned-ensemble-ridge-regression.ipynb
-2. Execute Stage 5.2. First-level-fine-tuned-ensemble-withNN.ipynb
-3. Execute Stage 5.3. First-level-fine-tuned-ensemble-with-LGBM.ipynb
-4. Execute Stage 5.4. Second-level-fine-tuned-ensemble.ipynb
+1. Execute `Stage 5.1. First-level-fine-tuned-ensemble-ridge-regression.ipynb`
+2. Execute `Stage 5.2. First-level-fine-tuned-ensemble-withNN.ipynb`
+3. Execute `Stage 5.3. First-level-fine-tuned-ensemble-with-LGBM.ipynb`
+4. Execute `Stage 5.4. Second-level-fine-tuned-ensemble.ipynb`
 
 #### Final Blending with post-processing (LB 0.881)
 
-1. Execute Stage 9. High-Ground.ipynb
-2. Execute Stage 42. Final Answer.ipynb
+1. Execute `Stage 9. High-Ground.ipynb`
+2. Execute `Stage 42. Final Answer.ipynb`
 
 The final prediction `final_answer.csv` would be generated under the folder `zake7749/data/high_ground/`
