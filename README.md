@@ -84,7 +84,7 @@ Execute Stage 1.3. Train-char-embeddings, which would output 3 char embeddings u
 
 #### Fine-tune the cls vector of BERT (LB 0.867)
 
-* Execute ...TBA...
+* Run script `hanshan/bert/train_wsdm.sh`
 
 #### Blend the predictions of ensemble NNs with BERT (LB 0.874)
 
@@ -101,7 +101,7 @@ Execute Stage 1.3. Train-char-embeddings, which would output 3 char embeddings u
 
 #### Fine-tune the cls vector of BERT with noisy labels (LB 0.880)
 
-* Execute ...TBA...
+* Run script `hanshan/bert/train_wsdm_pl.sh`
 
 #### Ensemble the predictions of fine-tuned base models (LB 0.879)
 
