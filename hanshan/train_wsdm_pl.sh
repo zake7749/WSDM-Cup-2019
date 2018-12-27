@@ -15,8 +15,8 @@ python train_wsdm_pl.py reproduce_bert_pseudo_labels \
                 --seed 42 \
                 --gradient_accumulation_steps 1 \
                 --do_test \
-                --subset 320 \
-                --dev_subset 80 \
+                #--subset 320 \
+                #--dev_subset 80 \
                 #--no_cuda
                 #--do_eval \
                 #--fp16 \

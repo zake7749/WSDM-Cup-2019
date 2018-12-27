@@ -320,34 +320,34 @@ def main():
         train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
     # dev
-    eval_examples = processor.get_dev_examples(
-        args.data_dir, args.dev_subset)
-    if args.dev_subset:
-        eval_examples = eval_examples[0:args.dev_subset]
-    eval_features = convert_examples_to_features(
-        eval_examples, label_list, args.max_seq_length, tokenizer)
-    all_input_ids = torch.tensor(
-        [f.input_ids for f in eval_features],
-        dtype=torch.long)
-    all_input_mask = torch.tensor(
-        [f.input_mask for f in eval_features],
-        dtype=torch.long)
-    all_segment_ids = torch.tensor(
-        [f.segment_ids for f in eval_features],
-        dtype=torch.long)
-    all_label_ids = torch.tensor(
-        [f.label_id for f in eval_features],
-        dtype=torch.long)
-    eval_data = TensorDataset(
-        all_input_ids, all_input_mask, all_segment_ids,
-        all_label_ids)
-    eval_sampler = SequentialSampler(eval_data)
-    eval_dataloader = DataLoader(
-        eval_data, sampler=eval_sampler,
-        batch_size=args.eval_batch_size)
+    #eval_examples = processor.get_dev_examples(
+    #    args.data_dir, args.dev_subset)
+    #if args.dev_subset:
+    #    eval_examples = eval_examples[0:args.dev_subset]
+    #eval_features = convert_examples_to_features(
+    #    eval_examples, label_list, args.max_seq_length, tokenizer)
+    #all_input_ids = torch.tensor(
+    #    [f.input_ids for f in eval_features],
+    #    dtype=torch.long)
+    #all_input_mask = torch.tensor(
+    #    [f.input_mask for f in eval_features],
+    #    dtype=torch.long)
+    #all_segment_ids = torch.tensor(
+    #    [f.segment_ids for f in eval_features],
+    #    dtype=torch.long)
+    #all_label_ids = torch.tensor(
+    #    [f.label_id for f in eval_features],
+    #    dtype=torch.long)
+    #eval_data = TensorDataset(
+    #    all_input_ids, all_input_mask, all_segment_ids,
+    #    all_label_ids)
+    #eval_sampler = SequentialSampler(eval_data)
+    #eval_dataloader = DataLoader(
+    #    eval_data, sampler=eval_sampler,
+    #    batch_size=args.eval_batch_size)
 
     # test
-    test_examples = processor.get_test_examples(args.data_dir)
+    test_examples = processor.get_test_examples(args.data_dir)[0:80]
     ids = [x.guid for x in test_examples]
     test_features = convert_examples_to_features(
         test_examples, label_list, args.max_seq_length, tokenizer)
@@ -373,32 +373,9 @@ def main():
     # training process
     global_step = 0 if not args.resume else args.resume_epoch
 
-    # initial eval
-    print('Performing initial evaluation...')
-    model.eval()
-    eval_loss, eval_accuracy = 0, 0
-    nb_eval_steps, nb_eval_examples = 0, 0
-    with tqdm(total=len(eval_dataloader), desc='Dev') as pbar:
-        for batch in eval_dataloader:
-            batch = tuple(t.to(device) for t in batch)
-            input_ids, input_mask, segment_ids, label_ids = batch
-            with torch.no_grad():
-                loss, logits = model(
-                    input_ids, segment_ids, input_mask, label_ids)
-            nb_eval_examples += label_ids.size(0)
-            logits = logits.detach().cpu().numpy()
-            tmp_eval_accuracy = accuracy(logits,
-                                         label_ids.detach().cpu().numpy())
-            eval_loss += loss.mean().item()
-            eval_accuracy += tmp_eval_accuracy
-            nb_eval_steps += 1
-            pbar.update()
-
     if args.do_train:
-
         # Epochs
         model.train()
-        tune_accs = []
         train_accs = []
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
             tr_loss, train_accuracy = 0, 0
@@ -453,21 +430,6 @@ def main():
                     model.zero_grad()
                     global_step += 1
 
-                # Stepwise tuning
-                if step % 50000 == 0:
-                    tune(model, eval_dataloader, device, saver,
-                         args.run_name,
-                         tune_accs)
-
-        # post epoch tuning
-        tune(model, eval_dataloader, device, saver, args.run_name,
-             tune_accs)
-
-        # save loss and tune acc history to file
-        stats = {'train_accs': train_accs, 'tune_accs': tune_accs}
-        stats_file_path = os.path.join(args.output_dir, 'stats.pkl')
-        pickle.dump(stats, open(stats_file_path, 'wb'))
-
     #
     # TEST
 
@@ -486,7 +448,7 @@ def main():
                 preds += list(logits.max(1)[1].detach().cpu().numpy())
                 pbar.update()
 
-        output_test_file = os.path.join(args.output_dir, "test_results.csv")
+        output_test_file = '../zake7749/data/bert/bert.csv'
         with open(output_test_file, 'w') as writer:
             writer.write('Id,Category\n')
             for i, guid in enumerate(ids):

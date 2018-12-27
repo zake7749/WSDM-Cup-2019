@@ -53,7 +53,7 @@ def tune(model, epoch, eval_dataloader, device, saver, run_name, tune_losses,
     if save_preds:
         probs = np.concatenate(probs, axis=0)
         probs = pd.DataFrame(probs, columns=['agreed', 'disagreed', 'unrelated'])
-        probs.to_csv('../zake7749/data/high_ground/fine_tuned_bert_epoch_%s.csv' % epoch, index=False)
+        probs.to_csv('../zake7749/data/high_ground/fine_tuned_bert.csv', index=False)
 
     print('%s results' % _type)
     print(result)
@@ -357,10 +357,6 @@ def main():
     # training process
     global_step = 0
 
-    # initial eval - to confirm our weights are loaded correctly
-    print('Performing initial evaluation...')
-    tune(model, 3, eval_dataloader, device, saver, args.run_name, [], [], save_preds=False)
-
     if args.do_train:
         # Epochs
         model.train()
@@ -425,9 +421,9 @@ def main():
             train_losses.append(tr_loss / nb_tr_steps)
             train_accs.append(tr_acc / nb_tr_steps)
 
-            # post epoch tuning
-            tune(model, epoch+1, eval_dataloader, device, saver, args.run_name,
-                 tune_losses, tune_accs, _type='dev', save_preds=True)
+    # generate predictions
+    tune(model, epoch+1, eval_dataloader, device, saver, args.run_name,
+         tune_losses, tune_accs, _type='dev', save_preds=True)
 
 
 if __name__ == "__main__":
