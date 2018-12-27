@@ -11,7 +11,6 @@ from torch.utils.data import TensorDataset, DataLoader, RandomSampler, \
     SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 import torch.nn.functional as F
-import glovar
 from bert import logger, wsdm
 from bert.inputs import MrpcProcessor, MnliProcessor, ColaProcessor, \
     WSDMProcessor, ARCTProcessor, WSDMPseudoProcessor
@@ -54,7 +53,7 @@ def tune(model, epoch, eval_dataloader, device, saver, run_name, tune_losses,
     if save_preds:
         probs = np.concatenate(probs, axis=0)
         probs = pd.DataFrame(probs, columns=['agreed', 'disagreed', 'unrelated'])
-        probs.to_csv('/home/ikmlab/hanshan/bert/data/wsdm/FOR_KZ/test_preds_epoch_%s.csv' % epoch, index=False)
+        probs.to_csv('../zake7749/data/high_ground/fine_tuned_bert_epoch_%s.csv' % epoch, index=False)
 
     print('%s results' % _type)
     print(result)
@@ -188,9 +187,7 @@ def main():
                              'improve fp16 convergence.')
 
     args = parser.parse_args()
-    args.data_dir = '/home/ikmlab/hanshan/wsdm18/pseudo_labels'
     args.task_name = 'wsdm_pseudo'
-    #args.output_dir = '/home/ikmlab/hanshan/bert/data/wsdm/FOR_KZ'
 
     processors = {
         "cola": ColaProcessor,
@@ -247,7 +244,7 @@ def main():
     processor = processors[task_name]()
     label_list = processor.get_labels()
 
-    tokenizer = BertTokenizer.from_pretrained(glovar.vocab[args.bert_model])
+    tokenizer = BertTokenizer.from_pretrained('bert-base-chinese')
 
     train_examples = None
     num_train_steps = None
@@ -375,7 +372,6 @@ def main():
         test_accs = []
         test_preds = []
         for epoch in trange(int(args.num_train_epochs), desc="Epoch"):
-            epoch += 3  # we are already 3 in on the load
             tr_loss, tr_acc = 0, 0
             nb_tr_examples, nb_tr_steps = 0, 0
             for step, batch in enumerate(tqdm(train_dataloader,
@@ -432,12 +428,6 @@ def main():
             # post epoch tuning
             tune(model, epoch+1, eval_dataloader, device, saver, args.run_name,
                  tune_losses, tune_accs, _type='dev', save_preds=True)
-
-        # save loss and tune acc history to file
-        stats = {'train_losses': train_losses, 'tune_losses': tune_losses,
-                 'train_accs': train_accs, 'tune_accs': tune_accs}
-        stats_file_path = os.path.join(args.output_dir, 'stats.pkl')
-        pickle.dump(stats, open(stats_file_path, 'wb'))
 
 
 if __name__ == "__main__":

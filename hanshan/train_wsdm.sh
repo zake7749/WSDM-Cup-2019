@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-python train_wsdm.py reproduce_bert --data_dir ../zake7794/data/dataset \
+python train_wsdm.py reproduce_bert --data_dir ../zake7749/data/dataset \
                 --bert_model bert-base-chinese \
                 --task_name wsdm \
-                --output_dir ../zake7794/data/bert/reproduce_bert \
+                --output_dir ../zake7749/data/bert/reproduce_bert \
                 --max_seq_length 128 \
                 --do_train \
                 --train_batch_size 32 \
@@ -14,8 +14,8 @@ python train_wsdm.py reproduce_bert --data_dir ../zake7794/data/dataset \
                 --seed 42 \
                 --gradient_accumulation_steps 1 \
                 --do_test \
-                #--subset 160 \
-                #--dev_subset 80 \
+                --subset 160 \
+                --dev_subset 80 \
                 #--no_cuda
                 #--do_eval \
                 #--fp16 \

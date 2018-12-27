@@ -11,7 +11,6 @@ from tqdm import tqdm, trange
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, \
     SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
-import glovar
 from bert import logger, wsdm
 from bert.inputs import MrpcProcessor, MnliProcessor, ColaProcessor, \
     WSDMProcessor, ARCTProcessor
@@ -234,7 +233,7 @@ def main():
     processor = processors[task_name]()
     label_list = processor.get_labels()
 
-    tokenizer = BertTokenizer.from_pretrained(glovar.vocab[args.bert_model])
+    tokenizer = BertTokenizer.from_pretrained('bert-base-chinese')
 
     train_examples = None
     num_train_steps = None
