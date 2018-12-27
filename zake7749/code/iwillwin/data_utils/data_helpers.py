@@ -229,14 +229,11 @@ class CharDataTransformer(DataTransformer):
         
         text = re.sub(r"’", "”", text)
         text = re.sub(r"‘", "“", text)
-        text = re.sub(r"“", "“", text)
-        text = re.sub(r"”", "”", text)
 
         text = re.sub(r"!", "!", text)
         text = re.sub(r"！", "!", text)
         text = re.sub(r",", "，", text)
         text = re.sub(r"–", " ", text)
-        text = re.sub(r"−", " ", text)
         text = re.sub(r"\.", " ", text)
         text = re.sub(r"\/", " ", text)
         text = re.sub(r"_", " ", text)
@@ -303,3 +300,7 @@ class CharDataTransformer(DataTransformer):
 
         print("Preprocessed.")
         return (train_sentence_1, train_sentence_2, train_features), (test_sentence_1, test_sentence_2, test_features), training_labels       
+
+    def build_tokenizer(self, comments):
+        self.tokenizer = StableTokenizer(num_words=self.max_num_words, char_level=self.char_level, filters='"$%&()*+,-./:;<=>@[\\]^_`{|}~\t\n')
+        self.tokenizer.fit_on_texts(comments)
