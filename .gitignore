@@ -6,3 +6,8 @@ __pycache__/
 *.csv
 *.vec
 *.bigram
+zake7749/data/bert/reproduce_bert/
+zake7749/data/bert/reproduce_bert_pseudo_labels/
+zake7749/data/bert/bert.csv
+zake7749/data/bert/preds.csv
+

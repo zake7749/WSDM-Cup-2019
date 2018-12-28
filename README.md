@@ -86,6 +86,7 @@ Execute `Stage 1.3. Train-char-embeddings`, which would output 3 char embeddings
 #### Fine-tune the cls vector of BERT (LB 0.867)
 
 * Run script `hanshan/bert/train_wsdm.sh`
+* To get predictions file to submit at this stage run `zake7749/bert/data/probs_to_preds.py`
 
 #### Blend the predictions of ensemble NNs with BERT (LB 0.874)
 
