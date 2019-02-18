@@ -2,6 +2,11 @@
 
 > This is the code to reproduce our results in WSDM 2019. Since we were in a race against the clock, this project is kind of dirty currently. I will upload the refactored version on another branch as soon as possible.
 
+## Documents
+
+* [Slides](https://docs.google.com/presentation/d/1RFKX6dJT4-MdwvKA2gglTXy1VJumkVDHU-USJpGDllc/edit?usp=sharing)
+* [Paper](https://people.eng.unimelb.edu.au/jianzhongq/wsdm19-cup-reports/reports/report3.pdf)
+
 ## Reproduce our results
 
 ### 1. Setup
