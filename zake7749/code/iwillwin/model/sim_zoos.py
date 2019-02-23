@@ -266,1152 +266,237 @@ def char_cnn(cnns, pools, length, seq_length, feature_maps, char_embeddings):
     x = Dropout(0.1)(x)
     return x
 
-class Capsule(Layer):
-    def __init__(self, num_capsule, dim_capsule, routings=3, kernel_size=(9, 1), share_weights=True,
-                 activation='default', **kwargs):
-        super(Capsule, self).__init__(**kwargs)
-        self.num_capsule = num_capsule
-        self.dim_capsule = dim_capsule
-        self.routings = routings
-        self.kernel_size = kernel_size
-        self.share_weights = share_weights
-        if activation == 'default':
-            self.activation = squash
-        else:
-            self.activation = Activation(activation)
-
-    def build(self, input_shape):
-        super(Capsule, self).build(input_shape)
-        input_dim_capsule = input_shape[-1]
-        if self.share_weights:
-            self.W = self.add_weight(name='capsule_kernel',
-                                     shape=(1, input_dim_capsule,
-                                            self.num_capsule * self.dim_capsule),
-                                     # shape=self.kernel_size,
-                                     initializer='glorot_uniform',
-                                     trainable=True)
-        else:
-            input_num_capsule = input_shape[-2]
-            self.W = self.add_weight(name='capsule_kernel',
-                                     shape=(input_num_capsule,
-                                            input_dim_capsule,
-                                            self.num_capsule * self.dim_capsule),
-                                     initializer='glorot_uniform',
-                                     trainable=True)
-
-    def call(self, u_vecs):
-        if self.share_weights:
-            u_hat_vecs = K.conv1d(u_vecs, self.W)
-        else:
-            u_hat_vecs = K.local_conv1d(u_vecs, self.W, [1], [1])
-
-        batch_size = K.shape(u_vecs)[0]
-        input_num_capsule = K.shape(u_vecs)[1]
-        u_hat_vecs = K.reshape(u_hat_vecs, (batch_size, input_num_capsule,
-                                            self.num_capsule, self.dim_capsule))
-        u_hat_vecs = K.permute_dimensions(u_hat_vecs, (0, 2, 1, 3))
-        # final u_hat_vecs.shape = [None, num_capsule, input_num_capsule, dim_capsule]
-
-        b = K.zeros_like(u_hat_vecs[:, :, :, 0])  # shape = [None, num_capsule, input_num_capsule]
-        for i in range(self.routings):
-            b = K.permute_dimensions(b, (0, 2, 1))  # shape = [None, input_num_capsule, num_capsule]
-            c = K.softmax(b)
-            c = K.permute_dimensions(c, (0, 2, 1))
-            b = K.permute_dimensions(b, (0, 2, 1))
-            outputs = self.activation(K.batch_dot(c, u_hat_vecs, [2, 2]))
-            if i < self.routings - 1:
-                b = K.batch_dot(outputs, u_hat_vecs, [2, 3])
-
-        return outputs
-
-    def compute_output_shape(self, input_shape):
-        return (None, self.num_capsule, self.dim_capsule)
-
-
-def get_decomp_attn(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
-                           projection_dim=50, projection_hidden=0, projection_dropout=0.2,
-                           compare_dim=300, compare_dropout=0.2,
-                           dense_dim=256, dense_dropout=0.2,
-                           lr=1e-3, activation='relu'):
-    
-    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
-    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-    
-    embedding = Embedding(nb_words,
-                            embedding_dim,
-                            input_length=max_sequence_length,
-                            trainable=True)
-    q1_embed = embedding(q1)
-    q1_embed = SpatialDropout1D(0.5)(q1_embed)
-    q2_embed = embedding(q2)
-    q2_embed = SpatialDropout1D(0.5)(q2_embed)
-    
-    self_attention = SelfAttention()
-    
-    th = TimeDistributed(Highway(activation='relu'))
-    th_2 = TimeDistributed(Highway(activation='relu'))
-    
-    q1_encoded = th(q1_embed,)
-    q2_encoded = th(q2_embed,)
-    q1_aligned, q2_aligned = soft_attention_alignment(q1_encoded, q2_encoded)    
-    
-    # Compare Deep
-    q1_combined = Concatenate()([q1_encoded, q2_aligned, submult(q1_encoded, q2_aligned),])
-    q2_combined = Concatenate()([q2_encoded, q1_aligned, submult(q2_encoded, q1_aligned),]) 
-    
-    compare_layers_d = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-    ]
-    
-    q1_compare = time_distributed(q1_combined, compare_layers_d)
-    q2_compare = time_distributed(q2_combined, compare_layers_d)
-
-    # Aggregate
-    q1_rep = apply_multiple(q1_compare, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-    q2_rep = apply_multiple(q2_compare, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-
-    # Dense meta featues
-    meta_densed = BatchNormalization()(input_layer_3)
-    meta_densed = Highway(activation='relu')(meta_densed)
-    meta_densed = Dropout(0.2)(meta_densed)
-    
-    # Classifier
-    q_diff = substract(q1_rep, q2_rep)
-    q_multi = Multiply()([q1_rep, q2_rep])
-    q_rep = Concatenate()([q1_rep, q2_rep])
-    
-    h_all = Concatenate()([q_diff, q_multi, q_rep, meta_densed])
-    h_all = Dropout(0.52)(h_all)
-    
-    dense = Dense(dense_dim, activation=activation)(h_all)
-    dense = BatchNormalization()(dense)
-    dense = Dropout(dense_dropout)(dense)
-    
-    dense = Dense(dense_dim, activation=activation)(dense)
-    dense = BatchNormalization()(dense)
-    dense = Dropout(dense_dropout)(dense)
-    
-    out_ = Dense(3, activation='softmax')(dense)
-    
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=out_)
-    model.compile(optimizer=Adam(lr=lr), loss='categorical_crossentropy', 
-                  metrics=['accuracy'])
-    model.summary()
-    return model
-
-def get_dense_cnn(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
+def get_char_dense_cnn(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
     projection_dim=50, projection_hidden=0, projection_dropout=0.2,
     compare_dim=288, compare_dropout=0.2,
     dense_dim=50, dense_dropout=0.2,
     lr=1e-3, activation='relu'):
 
     q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
     q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-
-    embedding = Embedding(nb_words,
-                            embedding_dim,
-                            
-                            input_length=max_sequence_length,
-                            trainable=True)
+    meta_features_input = Input(shape=(36,), name='mata-features')
     
-    q1_embed = embedding(q1)
-    q1_embed = SpatialDropout1D(0.5)(q1_embed)
-    q2_embed = embedding(q2)
-    q2_embed = SpatialDropout1D(0.5)(q2_embed)
-
-    th = TimeDistributed(Highway(activation='relu'))
+    q1_exact_match = Input(shape=(max_sequence_length,), name='first_exact_match')
+    q2_exact_match = Input(shape=(max_sequence_length,), name='second_exact_match')
     
-    q1_encoded = th(q1_embed,)    
-    q2_encoded = th(q2_embed,)
+    embedding = Embedding(nb_words, 150,
+                          weights=[embedding_matrix],
+                          input_length=max_sequence_length,
+                          trainable=False)
     
-    cnn_init = Conv1D(32, 1, strides=1, padding='same', activation='relu')
-
-    q1_aligned, q2_aligned = soft_attention_alignment(q1_encoded, q2_encoded)
-
-    q1_encoded = Concatenate()([q2_aligned, q1_encoded])
-    q2_encoded = Concatenate()([q1_aligned, q2_encoded])     
-    norm = BatchNormalization()
-
-    q1_seq = cnn_init(q1_encoded)
-    q1_seq = norm(q1_seq)
-    q2_seq = cnn_init(q2_encoded)    
-    q2_seq = norm(q2_seq)
+    flex_embedding = Embedding(nb_words, 20,
+                      input_length=max_sequence_length,
+                      trainable=True)
     
-    cnn_2 = Conv1D(32, 3, strides=1, padding='same', activation='relu')
-    cnn_3 = Conv1D(32, 1, strides=1, padding='same', activation='relu')
-
-    cnns = [cnn_2, cnn_3]
+    em_embeddings = Reshape((max_sequence_length, 1))
     
-    for idx, cnn in enumerate(cnns):
-        q1_aligned, q2_aligned = soft_attention_alignment(q1_seq, q2_seq)
-        q1_encoded = Concatenate()([q1_seq, q2_aligned, q1_encoded])
-        q2_encoded = Concatenate()([q2_seq, q1_aligned, q2_encoded])            
-        norm = BatchNormalization()
-
-        q1_seq = cnn(q1_encoded)
-        q1_seq = norm(q1_seq)
-        q2_seq = cnn(q2_encoded)    
-        q2_seq = norm(q2_seq)
+    q1_embed = Concatenate()([embedding(q1), em_embeddings(q1_exact_match),])
+    q1_encoded = SpatialDropout1D(0.2)(q1_embed)
     
-    # Pooling
-    q1_rep = apply_multiple(q1_seq, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-    q2_rep = apply_multiple(q2_seq, [GlobalAvgPool1D(), GlobalMaxPool1D(),])    
+    q2_embed = Concatenate()([embedding(q2), em_embeddings(q2_exact_match),])
+    q2_encoded = SpatialDropout1D(0.2)(q2_embed)
+    nb_filters = 64
     
-    # Classifier
-    q_diff = substract(q1_rep, q2_rep)
-    q_multi = Multiply()([q1_rep, q2_rep])
-    h_all = Concatenate()([q1_rep, q2_rep, q_diff, q_multi, ])
-    h_all = Dropout(0.5)(h_all)
-    h_all = Dense(256, activation='relu')(h_all)
-    out_ = Dense(3, activation='softmax')(h_all)
-
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=out_)
-    model.compile(optimizer=Adam(lr=lr, decay=1e-6,), loss='categorical_crossentropy',
-    metrics=['accuracy'])
-    model.summary()
-    return model
-
-def get_raw_decomp_attn(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
-                           projection_dim=50, projection_hidden=0, projection_dropout=0.2,
-                           compare_dim=300, compare_dropout=0.2,
-                           dense_dim=256, dense_dropout=0.2,
-                           lr=1e-3, activation='relu'):
+    cnns = [Conv1D(64, 1, strides=1, padding='same', activation='relu') for i in range(3)]
+    gates_cnns = [Conv1D(nb_filters, 3, dilation_rate=1, padding='same', activation='tanh') for i in range(3)]
+    sigm_cnns = [Conv1D(nb_filters, 3, dilation_rate=1, padding='same', activation='sigmoid') for i in range(3)]
     
-    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
-    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-    
-    embedding = Embedding(nb_words,
-                            embedding_dim,
-                            input_length=max_sequence_length,
-                            trainable=True)
-    q1_embed = embedding(q1)
-    q1_embed = SpatialDropout1D(0.5)(q1_embed)
-    q2_embed = embedding(q2)
-    q2_embed = SpatialDropout1D(0.5)(q2_embed)
+    for i in range(len(cnns)):
+        drop = Dropout(0.1)
+        q1_t = gates_cnns[i](q1_encoded)
+        q2_t = gates_cnns[i](q2_encoded)    
         
-    # Deep view
-    th = TimeDistributed(Highway(activation='relu'))
-    th_2 = TimeDistributed(Highway(activation='relu'))
-    
-    q1_encoded = th(q1_embed,)
-    #q1_encoded = Dropout(0.2)(q1_encoded)
-    #q2_encoded = th(q2_embed,)
-    #q2_encoded = Dropout(0.2)(q2_encoded)
-
-    q2_encoded = th(q2_embed,)
-    #q1_encoded = Dropout(0.2)(q1_encoded)
-
-    # Attention
-    q1_aligned, q2_aligned = soft_attention_alignment(q1_encoded, q2_encoded)    
-    #r1_aligned, r2_aligned = soft_attention_alignment(r1_encoded, r2_encoded)
-    
-    # Compare Deep
-    q1_combined = Concatenate()([q1_encoded, q2_aligned, submult(q1_encoded, q2_aligned),])
-    q2_combined = Concatenate()([q2_encoded, q1_aligned, submult(q2_encoded, q1_aligned),]) 
-    
-    compare_layers_d = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-    ]
-    
-    q1_compare = time_distributed(q1_combined, compare_layers_d)
-    q2_compare = time_distributed(q2_combined, compare_layers_d)
-
-    # Compare Region
-    #r1_combined = Concatenate()([r1_encoded, r2_aligned, submult(r1_encoded, r2_aligned)])
-    #r2_combined = Concatenate()([r2_encoded, r1_aligned, submult(r2_encoded, r1_aligned)]) 
-    
-    # Aggregate
-    q1_rep = apply_multiple(q1_compare, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-    q2_rep = apply_multiple(q2_compare, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-
-    # Dense meta featues
-    meta_densed = BatchNormalization()(input_layer_3)
-    meta_densed = Highway(activation='relu')(meta_densed)
-    meta_densed = Dropout(0.2)(meta_densed)
-    
-    # Classifier
-    q_diff = substract(q1_rep, q2_rep)
-    q_multi = Multiply()([q1_rep, q2_rep])
-    q_rep = Concatenate()([q1_rep, q2_rep])
-    
-    h_all = Concatenate()([q_diff, q_multi, q_rep,])
-    #h_all = q_rep
-    #h_all = Concatenate()([h_1, h_2, h_3, h_4])
-    #h_all = BatchNormalization()(h_all)
-    #h_all = Dropout(0.2)(h_all)
-    #h_all = Highway(activation='relu')(h_all)
-    #h_all = BatchNormalization()(h_all)
-    h_all = Dropout(0.52)(h_all)
-
-    #h_all = Highway(activation='relu')(h_all)
-    #h_all = BatchNormalization()(h_all)
-    #h_all = Dropout(0.2)(h_all)    
-    
-    #dense = BatchNormalization()(h_all)
-    
-    dense = Dense(dense_dim, activation=activation)(h_all)
-    dense = BatchNormalization()(dense)
-    dense = Dropout(dense_dropout)(dense)
-    
-    dense = Dense(dense_dim, activation=activation)(dense)
-    dense = BatchNormalization()(dense)
-    dense = Dropout(dense_dropout)(dense)
-    
-    out_ = Dense(3, activation='softmax')(dense)
-    
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=out_)
-    model.compile(optimizer=Adam(lr=lr), loss='categorical_crossentropy', 
-                  metrics=['accuracy'])
-    model.summary()
-    return model
-
-
-def get_sym_3d_cafe(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
-    projection_dim=50, projection_hidden=0, projection_dropout=0.2,
-    compare_dim=288, compare_dropout=0.2,
-    dense_dim=50, dense_dropout=0.2,
-    lr=1e-3, activation='relu'):
-
-    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
-    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-
-    embedding = Embedding(nb_words,
-                            embedding_dim,
-                            
-                            input_length=max_sequence_length,
-                            trainable=True)
-    
-    q1_embed = embedding(q1)
-    q1_embed = SpatialDropout1D(0.5)(q1_embed)
-    
-    q2_embed = embedding(q2)
-    q2_embed = SpatialDropout1D(0.5)(q2_embed)
-
-    self_attention = SelfAttention(d_model=embedding_dim)
-
-    # Deep view
-    th = TimeDistributed(Highway(activation='relu'))
-
-    q1_encoded = th(q1_embed,)    
-    q2_encoded = th(q2_embed,)
-
-    s1_encoded = self_attention(q1, q1_encoded)
-    s2_encoded = self_attention(q2, q2_encoded)
-    
-    # Attention
-    q1_aligned, q2_aligned = soft_attention_alignment(q1_encoded, q2_encoded)
-    
-    # Compare Deep
-    q1_combined1 = Concatenate()([q1_encoded, q2_aligned, submult(q1_encoded, q2_aligned),])
-    q2_combined1 = Concatenate()([q2_encoded, q1_aligned, submult(q2_encoded, q1_aligned),])
-    s1_combined1 = Concatenate()([q1_encoded, s1_encoded, submult(q1_encoded, s1_encoded),])
-    s2_combined1 = Concatenate()([q2_encoded, s2_encoded, submult(q2_encoded, s2_encoded),])
-    
-    
-    compare_layers_d = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(8, activation=activation),
-        Dropout(compare_dropout),
-    ]
-
-    compare_layers_g = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(8, activation=activation),
-        Dropout(compare_dropout),
-    ]
-
-    q1_compare = time_distributed(q1_combined1, compare_layers_d)
-    q2_compare = time_distributed(q2_combined1, compare_layers_d)
-    s1_compare = time_distributed(s1_combined1, compare_layers_g)
-    s2_compare = time_distributed(s2_combined1, compare_layers_g)
-
-    # Aggregate
-    q1_encoded = Concatenate()([q1_encoded, q1_compare, s1_compare])
-    q2_encoded = Concatenate()([q2_encoded, q2_compare, s2_compare])
-    
-    aggreate_rnn_1 = CuDNNGRU(76, return_sequences=True)    
-    q1_aggreated = aggreate_rnn_1(q1_encoded)
-    q1_aggreated = Dropout(0.2)(q1_aggreated)
-    q2_aggreated = aggreate_rnn_1(q2_encoded)
-    q2_aggreated = Dropout(0.2)(q2_aggreated)
-    
-    #q1_aggreated = fuse(q1_aggreated)
-    #q2_aggreated = fuse(q2_aggreated)
-
-    #q1_aggreated = Concatenate()([q1_encoded, q1_aggreated])
-    #q2_aggreated = Concatenate()([q2_encoded, q2_aggreated])    
-    
-    # Pooling
-    q1_rep = apply_multiple(q1_aggreated, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-    q2_rep = apply_multiple(q2_aggreated, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-
-    # Dense meta featues
-    meta_densed = Highway(activation='relu')(input_layer_3)
-    meta_densed = Dropout(0.2)(meta_densed)
-
-    # Classifier
-    q_diff = substract(q1_rep, q2_rep)
-    q_multi = Multiply()([q1_rep, q2_rep])
-    h_all1 = Concatenate()([q1_rep, q2_rep, q_diff, q_multi,])
-    h_all1 = Dropout(0.5)(h_all1)
-    
-    dense = Dense(256, activation='relu')
-    
-    h_all = dense(h_all1)
-    out_ = Dense(3, activation='softmax')(h_all)
-    
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=out_)
-    model.compile(optimizer=Adam(lr=lr), loss='categorical_crossentropy',
-    metrics=['accuracy'])
-    model.summary()
-    return model   
-
-def get_sym_3d_meta_cafe(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
-    projection_dim=50, projection_hidden=0, projection_dropout=0.2,
-    compare_dim=288, compare_dropout=0.2,
-    dense_dim=50, dense_dropout=0.2,
-    lr=1e-3, activation='relu'):
-
-    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
-    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-
-    embedding = Embedding(nb_words,
-                            embedding_dim,
-                            
-                            input_length=max_sequence_length,
-                            trainable=True)
-    
-    q1_embed = embedding(q1)
-    q1_embed = SpatialDropout1D(0.5)(q1_embed)
-    
-    q2_embed = embedding(q2)
-    q2_embed = SpatialDropout1D(0.5)(q2_embed)
-
-    self_attention = SelfAttention(d_model=embedding_dim)
-
-    # Deep view
-    th = TimeDistributed(Highway(activation='relu'))
-
-    q1_encoded = th(q1_embed,)    
-    q2_encoded = th(q2_embed,)
-
-    s1_encoded = self_attention(q1, q1_encoded)
-    s2_encoded = self_attention(q2, q2_encoded)
-    
-    # Attention
-    q1_aligned, q2_aligned = soft_attention_alignment(q1_encoded, q2_encoded)
-    
-    # Compare Deep
-    q1_combined1 = Concatenate()([q1_encoded, q2_aligned, submult(q1_encoded, q2_aligned),])
-    q1_combined2 = Concatenate()([q2_aligned, q1_encoded, submult(q1_encoded, q2_aligned),])
-    
-    q2_combined1 = Concatenate()([q2_encoded, q1_aligned, submult(q2_encoded, q1_aligned),])
-    q2_combined2 = Concatenate()([q1_aligned, q2_encoded, submult(q2_encoded, q1_aligned),])
-    
-    s1_combined1 = Concatenate()([q1_encoded, s1_encoded, submult(q1_encoded, s1_encoded),])
-    s1_combined2 = Concatenate()([s1_encoded, q1_encoded, submult(q1_encoded, s1_encoded),])
-    
-    s2_combined1 = Concatenate()([q2_encoded, s2_encoded, submult(q2_encoded, s2_encoded),])
-    s2_combined2 = Concatenate()([s2_encoded, q2_encoded, submult(q2_encoded, s2_encoded),])
-    
-    
-    compare_layers_d = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(8, activation=activation),
-        Dropout(compare_dropout),
-    ]
-
-    compare_layers_g = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(8, activation=activation),
-        Dropout(compare_dropout),
-    ]
-
-    q1_compare1 = time_distributed(q1_combined1, compare_layers_d)
-    q1_compare2 = time_distributed(q1_combined2, compare_layers_d)
-    q1_compare = Average()([q1_compare1, q1_compare2])
-
-    q2_compare1 = time_distributed(q2_combined1, compare_layers_d)
-    q2_compare2 = time_distributed(q2_combined2, compare_layers_d)
-    q2_compare = Average()([q2_compare1, q2_compare2])
-    
-    s1_compare1 = time_distributed(s1_combined1, compare_layers_g)
-    s1_compare2 = time_distributed(s1_combined2, compare_layers_g)
-    s1_compare = Average()([s1_compare1, s1_compare2])
-    
-    s2_compare1 = time_distributed(s2_combined1, compare_layers_g)
-    s2_compare2 = time_distributed(s2_combined2, compare_layers_g)
-    s2_compare = Average()([s2_compare1, s2_compare2])
-
-    # Aggregate
-    q1_encoded = Concatenate()([q1_encoded, q1_compare, s1_compare])
-    q2_encoded = Concatenate()([q2_encoded, q2_compare, s2_compare])
-    
-    aggreate_rnn_1 = CuDNNGRU(76, return_sequences=True)    
-    q1_aggreated = aggreate_rnn_1(q1_encoded)
-    q1_aggreated = Dropout(0.2)(q1_aggreated)
-    q2_aggreated = aggreate_rnn_1(q2_encoded)
-    q2_aggreated = Dropout(0.2)(q2_aggreated)
-    
-    #q1_aggreated = fuse(q1_aggreated)
-    #q2_aggreated = fuse(q2_aggreated)
-
-    #q1_aggreated = Concatenate()([q1_encoded, q1_aggreated])
-    #q2_aggreated = Concatenate()([q2_encoded, q2_aggreated])    
-    
-    # Pooling
-    q1_rep = apply_multiple(q1_aggreated, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-    q2_rep = apply_multiple(q2_aggreated, [GlobalAvgPool1D(), GlobalMaxPool1D(),])
-
-    # Dense meta featues
-    meta_densed = Highway(activation='relu')(input_layer_3)
-    meta_densed = Dropout(0.2)(meta_densed)
-
-    # Classifier
-    q_diff = substract(q1_rep, q2_rep)
-    q_multi = Multiply()([q1_rep, q2_rep])
-    h_all1 = Concatenate()([q1_rep, q2_rep, q_diff, q_multi, meta_densed])
-    h_all2 = Concatenate()([q2_rep, q1_rep, q_diff, q_multi, meta_densed])
-    h_all1 = Dropout(0.5)(h_all1)
-    h_all2 = Dropout(0.5)(h_all2)
-    
-    dense = Dense(256, activation='relu')
-    
-    h_all1 = dense(h_all1)
-    h_all2 = dense(h_all2)
-    h_all = Average()([h_all1, h_all2])
-    
-    out_ = Dense(3, activation='softmax')(h_all)
-    
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=out_)
-    model.compile(optimizer=Adam(lr=lr), loss='categorical_crossentropy',
-    metrics=['accuracy'])
-    model.summary()
-    return model
-
-def get_siamese_avcnn(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size):
-    embedding_layer = Embedding(nb_words,
-        embedding_dim,
+        q1_s = sigm_cnns[i](q1_encoded)
+        q2_s = sigm_cnns[i](q2_encoded)        
         
-        input_length=max_sequence_length,
-        trainable=True)
-    filter_nums = 128
-    # -- Dual input part --
-    print("Prepareing Inputs")
-    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
-    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-
-    embedding_layer = Embedding(nb_words,
-    embedding_dim,
-    
-    input_length=max_sequence_length,
-    trainable=True)
-
-    # -- Denstify --
-    tdense = TimeDistributed(Highway(activation='relu'))
-
-    embedded_1 = embedding_layer(q1)
-    embedded_1 = SpatialDropout1D(0.5)(embedded_1)
-    embedded_1 = tdense(embedded_1)
-
-    embedded_2 = embedding_layer(q2)
-    embedded_2 = SpatialDropout1D(0.5)(embedded_2)
-    embedded_2 = tdense(embedded_2)
-
-    conv_0 = Conv1D(filter_nums, 1, kernel_initializer="normal", padding="valid", activation="relu")
-    conv_1 = Conv1D(filter_nums, 2, kernel_initializer="normal", padding="valid", activation="relu")
-    conv_2 = Conv1D(filter_nums, 3, kernel_initializer="normal", padding="valid", activation="relu")
-
-    avg_0 = GlobalAveragePooling1D()
-    maxpool_0 = GlobalMaxPooling1D()
-
-    attn_0 = AttentionWeightedAverage()
-    attn_1 = AttentionWeightedAverage()
-    attn_2 = AttentionWeightedAverage()
-
-    sent_vecs = []
-
-    for embedded in [embedded_1, embedded_2]:
-        c0 = conv_0(embedded)
-        c1 = conv_1(embedded)
-        c2 = conv_2(embedded)
-
-        a0 = attn_0(c0)
-        a1 = attn_1(c1)
-        a2 = attn_2(c2)
-
-        g0 = avg_0(c0)
-        g1 = avg_0(c1)
-        g2 = avg_0(c2)
-
-        m0 = maxpool_0(c0)
-        m1 = maxpool_0(c1)
-        m2 = maxpool_0(c2)
-
-        v0_col = Concatenate()([a0, a1, a2])
-        v1_col = Concatenate()([g0, g1, g2])
-        v2_col = Concatenate()([m0, m1, m2])
-        merged_tensor = Concatenate()([v0_col, v2_col, v1_col])
-        #merged_tensor = Dropout(0.7)(merged_tensor)
-        sent_vecs.append(merged_tensor)
-
-    diff = Lambda(lambda t: K.abs(t[0] - t[1]), name='difference')(sent_vecs)
-    multiply = Lambda(lambda t: t[0] * t[1], name='multiply')(sent_vecs)
-    sent_vectors_pairs = concatenate(sent_vecs, axis=1)
-    sent_vectors_pairs = concatenate([diff, multiply, sent_vectors_pairs], axis=1)
-    sent_vectors_pairs = Dropout(0.7)(sent_vectors_pairs)
-
-    # -- Dense meta featues --
-    meta_features = BatchNormalization()(input_layer_3)
-    meta_densed = Dense(96, activation='relu')(input_layer_3)
-    meta_densed = Dropout(0.5)(meta_densed)
-    meta_densed = BatchNormalization()(meta_densed)
-    meta_densed = Dense(48, activation='relu')(meta_densed)
-    meta_densed = Dropout(0.5)(meta_densed)
-
-    all_outs = Concatenate()([meta_densed, sent_vectors_pairs])
-    all_outs = sent_vectors_pairs
-
-    output = Dense(units=300)(all_outs)
-    output = Activation('relu')(output)
-    output = BatchNormalization()(output)
-    output = Dropout(0.5)(output)
-
-    output = Dense(units=300)(output)
-    output = Activation('relu')(output)
-    output = BatchNormalization()(output)
-    output = Dropout(0.5)(output)
-
-    output = Dense(units=300)(output)
-    output = Activation('relu')(output)
-    output = BatchNormalization()(output)
-    output = Dropout(0.5)(output)
-
-    output = Dense(3, activation='softmax')(output)
-
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=output)
-    adam_optimizer = optimizers.Adam(lr=1e-3)
-    model.compile(loss='categorical_crossentropy', optimizer=adam_optimizer, metrics=['accuracy'])
-    model.summary()
-    return model   
-
-def get_siamese_meta_avcnn(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size):
-    embedding_layer = Embedding(nb_words,
-        embedding_dim,
+        q1_x = Multiply()([q1_t, q1_s])
+        q1_x = cnns[i](q1_x)
+        q1_x = drop(q1_x)
         
-        input_length=max_sequence_length,
-        trainable=True)
-    filter_nums = 128
-    # -- Dual input part --
-    print("Prepareing Inputs")
-    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
-    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
+        q2_x = Multiply()([q2_t, q2_s])
+        q2_x = cnns[i](q2_x)
+        q2_x = drop(q2_x)
 
-    embedding_layer = Embedding(nb_words,
-    embedding_dim,
+        q1_aligned, q2_aligned = soft_attention_alignment(q1_x, q2_x)
+        q1_encoded = Concatenate()([q1_x, q2_aligned, q1_encoded])
+        q2_encoded = Concatenate()([q2_x, q1_aligned, q2_encoded]) 
     
-    input_length=max_sequence_length,
-    trainable=True)
-
-    # -- Denstify --
-    tdense = TimeDistributed(Highway(activation='relu'))
-    tdense_2 = TimeDistributed(Highway(activation='relu'))
-
-    embedded_1 = embedding_layer(q1)
-    embedded_1 = SpatialDropout1D(0.5)(embedded_1)
-    embedded_1 = tdense(embedded_1)
-
-    embedded_2 = embedding_layer(q2)
-    embedded_2 = SpatialDropout1D(0.5)(embedded_2)
-    embedded_2 = tdense(embedded_2)
-
-    conv_0 = Conv1D(filter_nums, 1, kernel_initializer="normal", padding="valid", activation="relu")
-    conv_1 = Conv1D(filter_nums, 2, kernel_initializer="normal", padding="valid", activation="relu")
-    conv_2 = Conv1D(filter_nums, 3, kernel_initializer="normal", padding="valid", activation="relu")
-
-    avg_0 = GlobalAveragePooling1D()
-    maxpool_0 = GlobalMaxPooling1D()
-
-    attn_0 = AttentionWeightedAverage()
-    attn_1 = AttentionWeightedAverage()
-    attn_2 = AttentionWeightedAverage()
-
-    sent_vecs = []
-
-    for embedded in [embedded_1, embedded_2]:
-        c0 = conv_0(embedded)
-        c1 = conv_1(embedded)
-        c2 = conv_2(embedded)
-
-        a0 = attn_0(c0)
-        a1 = attn_1(c1)
-        a2 = attn_2(c2)
-
-        g0 = avg_0(c0)
-        g1 = avg_0(c1)
-        g2 = avg_0(c2)
-
-        m0 = maxpool_0(c0)
-        m1 = maxpool_0(c1)
-        m2 = maxpool_0(c2)
-
-        v0_col = Concatenate()([a0, a1, a2])
-        v1_col = Concatenate()([g0, g1, g2])
-        v2_col = Concatenate()([m0, m1, m2])
-        merged_tensor = Concatenate()([v0_col, v2_col, v1_col])
-        #merged_tensor = Dropout(0.7)(merged_tensor)
-        sent_vecs.append(merged_tensor)
-
-    diff = Lambda(lambda t: K.abs(t[0] - t[1]), name='difference')(sent_vecs)
-    multiply = Lambda(lambda t: t[0] * t[1], name='multiply')(sent_vecs)
-    sent_vectors_pairs = concatenate(sent_vecs, axis=1)
-    sent_vectors_pairs = concatenate([diff, multiply, sent_vectors_pairs], axis=1)
-    sent_vectors_pairs = Dropout(0.7)(sent_vectors_pairs)
-
-    # -- Dense meta featues --
-    meta_densed = Highway(activation='relu')(input_layer_3)
-    meta_densed = Dropout(0.2)(meta_densed)
-
-    all_outs = Concatenate()([meta_densed, sent_vectors_pairs])
-
-    output = Dense(units=300)(all_outs)
-    output = Activation('relu')(output)
-    output = BatchNormalization()(output)
-    output = Dropout(0.5)(output)
-
-    output = Dense(units=300)(output)
-    output = Activation('relu')(output)
-    output = BatchNormalization()(output)
-    output = Dropout(0.5)(output)
-
-    output = Dense(units=300)(output)
-    output = Activation('relu')(output)
-    output = BatchNormalization()(output)
-    output = Dropout(0.5)(output)
-
-    output = Dense(3, activation='softmax')(output)
-
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=output)
-    adam_optimizer = optimizers.Adam(lr=1e-3)
-    model.compile(loss='categorical_crossentropy', optimizer=adam_optimizer, metrics=['accuracy'])
-    model.summary()
-    return model
-
-def get_4way_cafe(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
-    projection_dim=50, projection_hidden=0, projection_dropout=0.2,
-    compare_dim=300, compare_dropout=0.2,
-    dense_dim=50, dense_dropout=0.2,
-    lr=1e-3, activation='relu'):
-
-    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
-    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-
-    embedding = Embedding(nb_words,
-                            embedding_dim,
-                            input_length=max_sequence_length,
-                            trainable=True)
+    attn = AttentionWeightedAverage()
+    q1_rep = apply_multiple(q1_encoded, [GlobalAvgPool1D(), GlobalMaxPool1D(), attn])
+    q2_rep = apply_multiple(q2_encoded, [GlobalAvgPool1D(), GlobalMaxPool1D(), attn])    
     
-    q1_embed = embedding(q1)
-    q1_embed = SpatialDropout1D(0.5)(q1_embed)
-    
-    q2_embed = embedding(q2)
-    q2_embed = SpatialDropout1D(0.5)(q2_embed)
-
-    self_attention = SelfAttention(d_model=embedding_dim)
-
-    # Deep view
-    th = TimeDistributed(Highway(activation='relu'))
-
-    q1_encoded = th(q1_embed,)    
-    q2_encoded = th(q2_embed,)
-
-    s1_encoded = self_attention(q1, q1_encoded)
-    s2_encoded = self_attention(q2, q2_encoded)
-    
-    # Attention
-    q1_aligned, q2_aligned = soft_attention_alignment(q1_encoded, q2_encoded)
-    
-    # Compare Deep
-    q1_combined = Concatenate()([q1_encoded, q2_aligned, submult(q1_encoded, q2_aligned),])    
-    q2_combined = Concatenate()([q2_encoded, q1_aligned, submult(q2_encoded, q1_aligned),])
-    s1_combined = Concatenate()([q1_encoded, s1_encoded, submult(q1_encoded, s1_encoded),])
-    s2_combined = Concatenate()([q2_encoded, s2_encoded, submult(q2_encoded, s2_encoded),])
-        
-    compare_layers_d = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(10, activation=activation),
-        Dropout(compare_dropout),
-    ]
-
-    compare_layers_g = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(10, activation=activation),
-        Dropout(compare_dropout),
-    ]
-
-    q1_compare = time_distributed(q1_combined, compare_layers_d)
-    q2_compare = time_distributed(q2_combined, compare_layers_d)
-
-    s1_compare = time_distributed(s1_combined, compare_layers_g)
-    s2_compare = time_distributed(s2_combined, compare_layers_g)
-    
-    # Aggregate
-    q1_encoded = Concatenate()([q1_encoded, q1_compare, s1_compare])
-    q2_encoded = Concatenate()([q2_encoded, q2_compare, s2_compare])
-    
-    aggreate_rnn_1 = CuDNNGRU(72, return_sequences=True)    
-    q1_aggreated = aggreate_rnn_1(q1_encoded)
-    q1_aggreated = Dropout(0.2)(q1_aggreated)
-    q2_aggreated = aggreate_rnn_1(q2_encoded)
-    q2_aggreated = Dropout(0.2)(q2_aggreated)
-    
-    #q1_aggreated = fuse(q1_aggreated)
-    #q2_aggreated = fuse(q2_aggreated)
-
-    #q1_aggreated = Concatenate()([q1_encoded, q1_aggreated])
-    #q2_aggreated = Concatenate()([q2_encoded, q2_aggreated])    
-    
-    attention = AttentionWeightedAverage()
-    last = Lambda(lambda v: v[:, -1, :])
-    
-    # Pooling
-    q1_rep = apply_multiple(q1_aggreated, [GlobalAvgPool1D(), GlobalMaxPool1D(), attention, last])
-    q2_rep = apply_multiple(q2_aggreated, [GlobalAvgPool1D(), GlobalMaxPool1D(), attention, last])
-
-    # Dense meta featues
-    meta_densed = Highway(activation='relu')(input_layer_3)
-    meta_densed = Dropout(0.2)(meta_densed)
-
     # Classifier
     q_diff = substract(q1_rep, q2_rep)
     q_multi = Multiply()([q1_rep, q2_rep])
     h_all = Concatenate()([q1_rep, q2_rep, q_diff, q_multi,])
-    h_all = Dropout(0.5)(h_all)
-    h_all = Dense(300, activation='relu')(h_all)    
+    h_all = Dropout(0.2)(h_all)
+    h_all = BatchNormalization()(h_all)  
+    h_all = Dense(64, activation='relu', kernel_initializer='glorot_uniform', kernel_regularizer=regularizers.l2(1e-6))(h_all)
     out_ = Dense(3, activation='softmax')(h_all)
-    
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=out_)
-    model.compile(optimizer=Adam(lr=lr), loss='categorical_crossentropy',
-    metrics=['accuracy'])
+
+    model = Model(inputs=[q1, q2, meta_features_input, q1_exact_match, q2_exact_match], outputs=out_)
+    model.compile(optimizer=Adam(lr=lr, decay=1e-6, clipnorm=1.5), loss='categorical_crossentropy',
+    metrics=['accuracy', weighted_accuracy])
     model.summary()
     return model
 
-def get_4way_meta_cafe(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
-    projection_dim=50, projection_hidden=0, projection_dropout=0.2,
-    compare_dim=300, compare_dropout=0.2,
-    dense_dim=50, dense_dropout=0.2,
-    lr=1e-3, activation='relu'):
-
-    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
-    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-
-    embedding = Embedding(nb_words,
-                            embedding_dim,
-                            input_length=max_sequence_length,
-                            trainable=True)
-    
-    q1_embed = embedding(q1)
-    q1_embed = SpatialDropout1D(0.5)(q1_embed)
-    
-    q2_embed = embedding(q2)
-    q2_embed = SpatialDropout1D(0.5)(q2_embed)
-
-    self_attention = SelfAttention(d_model=embedding_dim)
-
-    # Deep view
-    th = TimeDistributed(Highway(activation='relu'))
-
-    q1_encoded = th(q1_embed,)    
-    q2_encoded = th(q2_embed,)
-
-    s1_encoded = self_attention(q1, q1_encoded)
-    s2_encoded = self_attention(q2, q2_encoded)
-    
-    # Attention
-    q1_aligned, q2_aligned = soft_attention_alignment(q1_encoded, q2_encoded)
-    
-    # Compare Deep
-    q1_combined = Concatenate()([q1_encoded, q2_aligned, submult(q1_encoded, q2_aligned),])    
-    q2_combined = Concatenate()([q2_encoded, q1_aligned, submult(q2_encoded, q1_aligned),])
-    s1_combined = Concatenate()([q1_encoded, s1_encoded, submult(q1_encoded, s1_encoded),])
-    s2_combined = Concatenate()([q2_encoded, s2_encoded, submult(q2_encoded, s2_encoded),])
-        
-    compare_layers_d = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(10, activation=activation),
-        Dropout(compare_dropout),
-    ]
-
-    compare_layers_g = [
-        Dense(compare_dim, activation=activation),
-        Dropout(compare_dropout),
-        Dense(10, activation=activation),
-        Dropout(compare_dropout),
-    ]
-
-    q1_compare = time_distributed(q1_combined, compare_layers_d)
-    q2_compare = time_distributed(q2_combined, compare_layers_d)
-
-    s1_compare = time_distributed(s1_combined, compare_layers_g)
-    s2_compare = time_distributed(s2_combined, compare_layers_g)
-    
-    # Aggregate
-    q1_encoded = Concatenate()([q1_encoded, q1_compare, s1_compare])
-    q2_encoded = Concatenate()([q2_encoded, q2_compare, s2_compare])
-    
-    aggreate_rnn_1 = CuDNNGRU(72, return_sequences=True)    
-    q1_aggreated = aggreate_rnn_1(q1_encoded)
-    q1_aggreated = Dropout(0.2)(q1_aggreated)
-    q2_aggreated = aggreate_rnn_1(q2_encoded)
-    q2_aggreated = Dropout(0.2)(q2_aggreated)
-    
-    #q1_aggreated = fuse(q1_aggreated)
-    #q2_aggreated = fuse(q2_aggreated)
-
-    #q1_aggreated = Concatenate()([q1_encoded, q1_aggreated])
-    #q2_aggreated = Concatenate()([q2_encoded, q2_aggreated])    
-    
-    attention = AttentionWeightedAverage()
-    last = Lambda(lambda v: v[:, -1, :])
-    
-    # Pooling
-    q1_rep = apply_multiple(q1_aggreated, [GlobalAvgPool1D(), GlobalMaxPool1D(), attention, last])
-    q2_rep = apply_multiple(q2_aggreated, [GlobalAvgPool1D(), GlobalMaxPool1D(), attention, last])
-
-    # Dense meta featues
-    meta_densed = Highway(activation='relu')(input_layer_3)
-    meta_densed = Dropout(0.2)(meta_densed)
-
-    # Classifier
-    q_diff = substract(q1_rep, q2_rep)
-    q_multi = Multiply()([q1_rep, q2_rep])
-    h_all = Concatenate()([q1_rep, q2_rep, q_diff, q_multi, meta_densed])
-    h_all = Dropout(0.5)(h_all)
-    h_all = Dense(300, activation='relu')(h_all)    
-    out_ = Dense(3, activation='softmax')(h_all)
-    
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=out_)
-    model.compile(optimizer=Adam(lr=lr), loss='categorical_crossentropy',
-    metrics=['accuracy'])
-    model.summary()
-    return model
-
-def get_dense_meta_cnn(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
+def get_char_darnn(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
     projection_dim=50, projection_hidden=0, projection_dropout=0.2,
     compare_dim=288, compare_dropout=0.2,
     dense_dim=50, dense_dropout=0.2,
     lr=1e-3, activation='relu'):
 
     q1 = Input(shape=(max_sequence_length,), name='first_sentences')
-    q1_c = Input(shape=(max_sequence_length, 11), name='first_sentences_char')
     q2 = Input(shape=(max_sequence_length,), name='second_sentences')
-    q2_c = Input(shape=(max_sequence_length, 11), name='second_sentences_char')
-    input_layer_3 = Input(shape=(len(model_config.META_FEATURES),), name='mata-features', dtype="float32")
-
-    embedding = Embedding(nb_words,
-                            embedding_dim,
-                            
-                            input_length=max_sequence_length,
-                            trainable=True)
+    q1_exact_match = Input(shape=(max_sequence_length,), name='first_exact_match')
+    q2_exact_match = Input(shape=(max_sequence_length,), name='second_exact_match')
     
-    q1_embed = embedding(q1)
-    q1_embed = SpatialDropout1D(0.5)(q1_embed)
-    q2_embed = embedding(q2)
-    q2_embed = SpatialDropout1D(0.5)(q2_embed)
+    input_layer_3 = Input(shape=(36,), name='mata-features', dtype="float32")
 
-    th = TimeDistributed(Highway(activation='relu'))
+    embedding = Embedding(nb_words, 150,
+                          weights=[embedding_matrix],
+                          input_length=max_sequence_length,
+                          trainable=False)
+ 
+    em_embeddings = Embedding(2, 1,
+                     input_length=max_sequence_length,
+                     trainable=True)   
     
-    q1_encoded = th(q1_embed,)    
-    q2_encoded = th(q2_embed,)
+    q1_embed = Concatenate()([embedding(q1), em_embeddings(q1_exact_match)])
+    q1_embed = SpatialDropout1D(0.1)(q1_embed)
     
-    cnn_init = Conv1D(32, 1, strides=1, padding='same', activation='relu')
-
-    q1_aligned, q2_aligned = soft_attention_alignment(q1_encoded, q2_encoded)
-
-    q1_encoded = Concatenate()([q2_aligned, q1_encoded])
-    q2_encoded = Concatenate()([q1_aligned, q2_encoded])     
-    norm = BatchNormalization()
-
-    q1_seq = cnn_init(q1_encoded)
-    q1_seq = norm(q1_seq)
-    q2_seq = cnn_init(q2_encoded)    
-    q2_seq = norm(q2_seq)
+    q2_embed = Concatenate()([embedding(q2), em_embeddings(q2_exact_match)])
+    q2_embed = SpatialDropout1D(0.1)(q2_embed)
     
-    cnn_2 = Conv1D(32, 3, strides=1, padding='same', activation='relu')
-    cnn_3 = Conv1D(32, 1, strides=1, padding='same', activation='relu')
-    cnn_4 = Conv1D(32, 3, strides=1, padding='same', activation='relu')
-    cnn_5 = Conv1D(32, 1, strides=1, padding='same', activation='relu') 
-
-    cnns = [cnn_2, cnn_3]
-    #rnn_6 = CuDNNGRU(6, return_sequences=True,)
+    rnns = [CuDNNGRU(42, return_sequences=True) for i in range(3)]
     
-    for idx, cnn in enumerate(cnns):
+    q1_res = []
+    q2_res = []
+    
+    
+    for idx, rnn in enumerate(rnns):
+        q1_seq = rnn(q1_embed)
+        q1_seq = Dropout(0.1)(q1_seq)
+        q2_seq = rnn(q2_embed)
+        q2_seq = Dropout(0.1)(q2_seq)
         q1_aligned, q2_aligned = soft_attention_alignment(q1_seq, q2_seq)
-        q1_encoded = Concatenate()([q1_seq, q2_aligned, q1_encoded])
-        q2_encoded = Concatenate()([q2_seq, q1_aligned, q2_encoded])            
-        norm = BatchNormalization()
-
-        q1_seq = cnn(q1_encoded)
-        q1_seq = norm(q1_seq)
-        q2_seq = cnn(q2_encoded)    
-        q2_seq = norm(q2_seq)
-    
+        
+        q1_res.append(q2_aligned)
+        q1_res.append(q1_seq)
+        
+        q2_res.append(q1_aligned)
+        q2_res.append(q2_seq)
+        
+        q1_embed = Concatenate()([q1_seq, q2_aligned, q1_embed])
+        q2_embed = Concatenate()([q2_seq, q1_aligned, q2_embed])            
+        
     # Pooling
-    attn = AttentionWeightedAverage()
-    q1_rep = apply_multiple(q1_seq, [GlobalAvgPool1D(), GlobalMaxPool1D(), attn])
-    q2_rep = apply_multiple(q2_seq, [GlobalAvgPool1D(), GlobalMaxPool1D(), attn])    
+    #q1_rep = Flatten()(capsule_pooling(q1_encoded))
+    #q2_rep = Flatten()(capsule_pooling(q2_encoded))
+    
+    q1_res = Concatenate()(q1_res)
+    q2_res = Concatenate()(q2_res)
+    
+    q1_rep = apply_multiple(q1_res, [GlobalAvgPool1D(), GlobalMaxPool1D()])
+    q2_rep = apply_multiple(q2_res, [GlobalAvgPool1D(), GlobalMaxPool1D()])    
     
     # Classifier
-    meta_densed = Highway(activation='relu')(input_layer_3)
-    meta_densed = Dropout(0.2)(meta_densed)
-    
     q_diff = substract(q1_rep, q2_rep)
     q_multi = Multiply()([q1_rep, q2_rep])
-    h_all = Concatenate()([q1_rep, q2_rep, q_diff, q_multi, meta_densed])
-    h_all = Dropout(0.5)(h_all)
+    h_all = Concatenate()([q1_rep, q2_rep, q_diff, q_multi,])
+    h_all = Dropout(0.1)(h_all)
     h_all = Dense(256, activation='relu')(h_all)
     out_ = Dense(3, activation='softmax')(h_all)
 
-    model = Model(inputs=[q1, q2, input_layer_3], outputs=out_)
+    model = Model(inputs=[q1, q2, input_layer_3, q1_exact_match, q2_exact_match], outputs=out_)
     model.compile(optimizer=Adam(lr=lr, decay=1e-6,), loss='categorical_crossentropy',
-    metrics=['accuracy'])
+    metrics=['accuracy', weighted_accuracy])
     model.summary()
     return model
 
-class ModelManager(object):
+
+def get_char_ESIM(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
+    projection_dim=50, projection_hidden=0, projection_dropout=0.2,
+    compare_dim=288, compare_dropout=0.2,
+    dense_dim=50, dense_dropout=0.2,
+    lr=1e-3, activation='relu'):
+
+    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
+    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
+    q1_exact_match = Input(shape=(max_sequence_length,), name='first_exact_match')
+    q2_exact_match = Input(shape=(max_sequence_length,), name='second_exact_match')
     
-    def __init__(self, *args, **kwargs):
+    input_layer_3 = Input(shape=(36,), name='mata-features', dtype="float32")
+
+    #input_encoded = BatchNormalization()(input_layer_3)
+    input_encoded = Dense(2016, activation='elu')(input_layer_3)
+    input_encoded = Dropout(0.25)(input_encoded)
+    
+    embedding = Embedding(nb_words, 150,
+                          weights=[embedding_matrix],
+                          input_length=max_sequence_length,
+                          trainable=False)
+ 
+    em_embeddings = Embedding(2, 1,
+                     input_length=max_sequence_length,
+                     trainable=True)   
+    
+    #q1_embed = Concatenate()([embedding(q1), em_embeddings(q1_exact_match)])
+    q1_embed = embedding(q1)
+    q1_embed = SpatialDropout1D(0.1)(q1_embed)
+    
+    #q2_embed = Concatenate()([embedding(q2), em_embeddings(q2_exact_match)])
+    q2_embed = embedding(q2)
+    q2_embed = SpatialDropout1D(0.1)(q2_embed)
+
+    batch_norm = BatchNormalization(axis=-1)
+    q1_embed = batch_norm(q1_embed)
+    q2_embed = batch_norm(q2_embed)
+    
+    aggreation_gru = Bidirectional(CuDNNLSTM(72, return_sequences=True))
+ 
+    q1_seq = aggreation_gru(q1_embed)
+    q2_seq = aggreation_gru(q2_embed)
         
-        # Note: should refactor to dict
-        self.models_tag = [
-            'RawDecomposableAttn',
-            'MetaDecomposableAttn',
+    q1_aligned, q2_aligned = soft_attention_alignment(q1_seq, q2_seq)
+    q1_vec = Concatenate()([q1_seq, q2_aligned, substract(q1_seq, q2_aligned), Multiply()([q1_seq, q2_aligned])])
+    q2_vec = Concatenate()([q2_seq, q1_aligned, substract(q2_seq, q1_aligned), Multiply()([q2_seq, q1_aligned])])
+    
+    compare_gru = Bidirectional(CuDNNLSTM(72, return_sequences=True))
+    
+    q1_rep = compare_gru(q1_vec)
+    q2_rep = compare_gru(q2_vec)
+    
+    q1_rep = apply_multiple(q1_rep, [GlobalAvgPool1D(), GlobalMaxPool1D()])
+    q2_rep = apply_multiple(q2_rep, [GlobalAvgPool1D(), GlobalMaxPool1D()])    
+    
+    h_all = Concatenate()([q1_rep, q2_rep])
+    h_all = BatchNormalization()(h_all)
+    
+    h_all = Dense(256, activation='elu')(h_all)
+    h_all = BatchNormalization()(h_all)
+    h_all = Dropout(0.2)(h_all)
+    
+    h_all = Dense(256, activation='elu')(h_all)
+    h_all = BatchNormalization()(h_all)
+    h_all = Dropout(0.2)(h_all)
+    
+    out_ = Dense(3, activation='softmax')(h_all)
+    
+    model = Model(inputs=[q1, q2, input_layer_3, q1_exact_match, q2_exact_match], outputs=out_)
+    model.compile(optimizer=Adam(lr=lr, decay=1e-6, clipnorm=1.5, amsgrad=True), loss='categorical_crossentropy',
+    metrics=['accuracy', weighted_accuracy])
+    model.summary()
+    return model
 
-            'Symmetric3D',
-            'Symmetric3DMeta',  # SymNet Family
-
-            'DenseCNN',
-            'DenseMetaCNN', # DenseCNN Family
-
-            'DeepAVCNN',
-            'DeepMetaAVCNN',
-            
-            '4way_net',
-            '4way_metaNet',
-        ]
-
-        self.models_checkpoints_pathes = [
-            '../model/model_checkpoint/DecomposableAttn/RawDecomposableAttn-NoScale-Patience40',
-            '../model/model_checkpoint/DecomposableAttn/DecomposableAttn-NoScale-Patience40',
-
-            "../model/model_checkpoint/Syms/Symetric-SELU3DCafe-AllNoScale-Patience30",
-            "../model/model_checkpoint/Syms/Symetric-SELU3DMetaCafe-AllNoScale-Patience30", # SymNet Family
-
-            "../model/model_checkpoint/ScaledDenseCNN/DenseCNN-Patience60",
-            '../model/model_checkpoint/ScaledDenseCNN/DenseMetaCNN-Patience60', # DenseCNN Family
-
-            "../model/model_checkpoint/DeepAVCNN/DeepAVCNN-NoScale-Patience50",
-            "../model/model_checkpoint/DeepAVCNN/DeepMetaAVCNN-NoScale-Patience50",
-
-            "../model/model_checkpoint/4Way/4Way-NoClassScale-NoValidScale-Patience50",
-            "../model/model_checkpoint/4Way/4WayMeta-NoClassScale-NoValidScale-Patience50",
-            
-        ]
-
-        self.submit_predix = [
-            "RawDecomposableAttn-NoScale-Patience40",
-            "DecomposableAttn-NoScale-Patience40",
-
-            "SymmetricSelu3DCafe-AllNoScale",
-            "SymmetricSelu3DMetaCafe-ScaleClass",  # SymNet Family
-
-            "DenseCNN-ScaleClass-ScaleValid",
-            "DenseMetaCNN-ScaleClass",
-
-            "DeepAVCNN-NoScale",
-            "DeepMetaAVCNN-NoScale",
-
-            "4Way-NoScale",
-            "Meta4Way-NoScale",
-        ]
-
-        self.model_funcs = [
-            get_raw_decomp_attn,
-            get_decomp_attn,
-
-            get_sym_3d_cafe,
-            get_sym_3d_meta_cafe, # Symmetric net family
-
-            get_dense_cnn,
-            get_dense_meta_cnn,
-
-            get_siamese_avcnn,
-            get_siamese_meta_avcnn, # avcnn family
-
-            get_4way_cafe,
-            get_4way_meta_cafe, # 4way family
-        ]
-
-        self.model_patiences = [
-            15,
-            13,
-
-            10,
-            10,
-
-            20,
-            20,
-
-            15,
-            15,
-
-            10,
-            10,
-        ]
-
-        self.model_class_weights = [True] * 10
-        self.model_scale_sample_weights = [True] * 10
-
-    #def agent_func(NB_WORDS, EMBEDDING_DIM, embedding_matrix, MAX_SEQUENCE_LENGTH, OUT_SIZE):
-    #    return 
-        
+def weighted_accuracy(y_true, y_pred):
+    weight = np.array([[1/16, 1/15, 1/5]])
+    norm = [(1/16) + (1/15) + (1/5)]
+    weight_mask = weight * y_true
+    
+    y_pred = K.cast(y_pred > 0.5, 'int32') # hard version
+    y_true = K.cast(y_true, 'int32')
+    
+    res = K.cast(K.equal(y_pred, y_true), 'float32') * weight_mask / K.sum(weight_mask)
+    res = K.sum(res)
+    return res
