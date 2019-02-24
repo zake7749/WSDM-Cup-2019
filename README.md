@@ -1,4 +1,6 @@
-# Fake News Classification
+# Fake News Detection
+
+This is the 3rd place solution to [ACM International Conference on Web Search and Data Mining(WSDM) Cup 2019](http://www.wsdm-conference.org/2019/), a challenge to fake news detection and sentence pairs modeling.
 
 ## Documents
 
