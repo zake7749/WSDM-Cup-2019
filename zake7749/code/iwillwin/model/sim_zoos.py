@@ -771,11 +771,12 @@ def weighted_accuracy(y_true, y_pred):
     weight = np.array([[1/16, 1/15, 1/5]])
     norm = [(1/16) + (1/15) + (1/5)]
     weight_mask = weight * y_true
+    label_weights = K.max(K.cast(weight_mask, 'float32'), axis=-1)
     
-    y_pred = K.cast(y_pred > 0.5, 'int32') # hard version
-    y_true = K.cast(y_true, 'int32')
+    true_label = K.argmax(y_true, axis=-1)
+    pred_label = K.argmax(y_pred, axis=-1)
     
-    res = K.cast(K.equal(y_pred, y_true), 'float32') * weight_mask / K.sum(weight_mask)
+    res = K.cast(K.equal(true_label, pred_label), tf.float32) * label_weights / K.sum(label_weights)
     res = K.sum(res)
     return res
 
@@ -789,3 +790,146 @@ def numpy_weighted_accuracy(y_true, y_pred):
     res = np.equal(y_pred, y_true) * weight_mask / np.sum(weight_mask)
     res = np.sum(res)
     return res   
+
+def get_decomposable_attention(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
+    projection_dim=50, projection_hidden=0, projection_dropout=0.2,
+    compare_dim=288, compare_dropout=0.2,
+    dense_dim=50, dense_dropout=0.2,
+    lr=1e-3, activation='relu'):
+
+    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
+    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
+    q1_exact_match = Input(shape=(max_sequence_length,), name='first_exact_match')
+    q2_exact_match = Input(shape=(max_sequence_length,), name='second_exact_match')    
+    input_layer_3 = Input(shape=(36,), name='mata-features', dtype="float32")
+    
+    embedding = Embedding(nb_words, embedding_dim,
+                          weights=[embedding_matrix],
+                          input_length=max_sequence_length,
+                          trainable=False)
+    
+    em_embeddings = Embedding(2, 1,
+                     input_length=max_sequence_length,
+                     trainable=True)   
+    
+    #q1_embed = Concatenate()([embedding(q1), em_embeddings(q1_exact_match)])
+    q1_embed = embedding(q1)
+    q1_embed = SpatialDropout1D(0.1)(q1_embed)
+    
+    #q2_embed = Concatenate()([embedding(q2), em_embeddings(q2_exact_match)])
+    q2_embed = embedding(q2)
+    q2_embed = SpatialDropout1D(0.1)(q2_embed)
+
+    th = TimeDistributed(Highway(activation='relu'))
+    q1_embed = th(q1_embed)
+    q2_embed = th(q2_embed)
+        
+    q1_aligned, q2_aligned = soft_attention_alignment(q1_embed, q2_embed)
+    q1_vec = Concatenate()([q1_embed, q2_aligned, substract(q1_embed, q2_aligned), Multiply()([q1_embed, q2_aligned])])
+    q2_vec = Concatenate()([q2_embed, q1_aligned, substract(q2_embed, q1_aligned), Multiply()([q2_embed, q1_aligned])])
+    
+    dense_compares = [
+        Dense(300, activation='elu'),
+        Dropout(0.2),
+        Dense(200, activation='elu'),
+        Dropout(0.2),
+    ]
+
+    q1_compared = time_distributed(q1_vec, dense_compares)
+    q2_compared = time_distributed(q2_vec, dense_compares)
+    
+    q1_rep = apply_multiple(q1_compared, [GlobalAvgPool1D(), GlobalMaxPool1D()])
+    q2_rep = apply_multiple(q2_compared, [GlobalAvgPool1D(), GlobalMaxPool1D()])    
+    
+    h_all = Concatenate()([q1_rep, q2_rep])
+    h_all = BatchNormalization()(h_all)
+    
+    h_all = Dense(256, activation='elu')(h_all)
+    h_all = Dropout(0.2)(h_all)
+    h_all = BatchNormalization()(h_all)
+
+    h_all = Dense(256, activation='elu')(h_all)
+    h_all = Dropout(0.2)(h_all)
+    h_all = BatchNormalization()(h_all)    
+    
+    out_ = Dense(3, activation='softmax')(h_all)
+    
+    model = Model(inputs=[q1, q2, input_layer_3, q1_exact_match, q2_exact_match], outputs=out_)
+    model.compile(optimizer=Adam(lr=lr, decay=1e-6, clipnorm=1.5, amsgrad=True), loss='categorical_crossentropy',
+    metrics=['accuracy', weighted_accuracy])
+    model.summary()
+    return model
+
+def get_char_decomposable_attention(nb_words, embedding_dim, embedding_matrix, max_sequence_length, out_size,
+    projection_dim=50, projection_hidden=0, projection_dropout=0.2,
+    compare_dim=288, compare_dropout=0.2,
+    dense_dim=50, dense_dropout=0.2,
+    lr=1e-3, activation='relu'):
+
+    q1 = Input(shape=(max_sequence_length,), name='first_sentences')
+    q2 = Input(shape=(max_sequence_length,), name='second_sentences')
+    q1_exact_match = Input(shape=(max_sequence_length,), name='first_exact_match')
+    q2_exact_match = Input(shape=(max_sequence_length,), name='second_exact_match')
+
+    input_layer_3 = Input(shape=(36,), name='mata-features', dtype="float32")
+
+    #input_encoded = BatchNormalization()(input_layer_3)
+    input_encoded = Dense(2016, activation='elu')(input_layer_3)
+    input_encoded = Dropout(0.25)(input_encoded)
+
+    embedding = Embedding(nb_words, 150,
+                            weights=[embedding_matrix],
+                            input_length=max_sequence_length,
+                            trainable=False)
+
+    em_embeddings = Embedding(2, 1,
+                        input_length=max_sequence_length,
+                        trainable=True)   
+
+    #q1_embed = Concatenate()([embedding(q1), em_embeddings(q1_exact_match)])
+    q1_embed = embedding(q1)
+    q1_embed = SpatialDropout1D(0.1)(q1_embed)
+
+    #q2_embed = Concatenate()([embedding(q2), em_embeddings(q2_exact_match)])
+    q2_embed = embedding(q2)
+    q2_embed = SpatialDropout1D(0.1)(q2_embed)
+
+    th = TimeDistributed(Highway(activation='relu'))
+    q1_embed = th(q1_embed)
+    q2_embed = th(q2_embed)
+        
+    q1_aligned, q2_aligned = soft_attention_alignment(q1_embed, q2_embed)
+    q1_vec = Concatenate()([q1_embed, q2_aligned, substract(q1_embed, q2_aligned), Multiply()([q1_embed, q2_aligned])])
+    q2_vec = Concatenate()([q2_embed, q1_aligned, substract(q2_embed, q1_aligned), Multiply()([q2_embed, q1_aligned])])
+
+    dense_compares = [
+        Dense(300, activation='elu'),
+        Dropout(0.2),
+        Dense(200, activation='elu'),
+        Dropout(0.2),
+    ]
+
+    q1_compared = time_distributed(q1_vec, dense_compares)
+    q2_compared = time_distributed(q2_vec, dense_compares)
+
+    q1_rep = apply_multiple(q1_compared, [GlobalAvgPool1D(), GlobalMaxPool1D()])
+    q2_rep = apply_multiple(q2_compared, [GlobalAvgPool1D(), GlobalMaxPool1D()])    
+
+    h_all = Concatenate()([q1_rep, q2_rep])
+    h_all = BatchNormalization()(h_all)
+
+    h_all = Dense(256, activation='elu')(h_all)
+    h_all = Dropout(0.2)(h_all)
+    h_all = BatchNormalization()(h_all)
+
+    h_all = Dense(256, activation='elu')(h_all)
+    h_all = Dropout(0.2)(h_all)
+    h_all = BatchNormalization()(h_all)    
+
+    out_ = Dense(3, activation='softmax')(h_all)
+
+    model = Model(inputs=[q1, q2, input_layer_3, q1_exact_match, q2_exact_match], outputs=out_)
+    model.compile(optimizer=Adam(lr=lr, decay=1e-6, clipnorm=1.5, amsgrad=True), loss='categorical_crossentropy',
+    metrics=['accuracy', weighted_accuracy])
+    model.summary()
+    return model   
