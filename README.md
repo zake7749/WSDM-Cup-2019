@@ -101,10 +101,8 @@ Execute `Stage 1.3. Train-char-embeddings`, which would output 3 char embeddings
 
 #### Fine-tune the base models with noisy labels (LB 0.86 ~ 0.875)
 
-* Execute `Stage 4.1. Fine-tune-word-levels.ipynb`
-* Execute `Stage 4.2. Fine-tune-word-levels-ScaleValid.ipynb`
-* Execute `Stage 4.3. Fine-tune-char-levels.ipynb`
-* Execute `Stage 4.4. Fine-tune-char-levels-ScaleValid.ipynb`
+* Execute `Stage 4.1. Fine-tune-word-level-models.ipynb`
+* Execute `Stage 4.2. Fine-tune-char-level-models.ipynb`
 
 #### Fine-tune the cls vector of BERT with noisy labels (LB 0.880)
 
