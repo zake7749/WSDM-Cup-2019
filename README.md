@@ -8,7 +8,7 @@ This is the 3rd place solution to [ACM International Conference on Web Search an
 ## Documents
 
 * [Slides](https://docs.google.com/presentation/d/1RFKX6dJT4-MdwvKA2gglTXy1VJumkVDHU-USJpGDllc/edit?usp=sharing)
-* [Paper](https://people.eng.unimelb.edu.au/jianzhongq/wsdm19-cup-reports/reports/report3.pdf)
+* [Paper](https://arxiv.org/pdf/1907.07347.pdf)
 
 ## Reproduce our results
 
