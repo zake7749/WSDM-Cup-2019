@@ -4,7 +4,6 @@ This is the 3rd place solution to [ACM International Conference on Web Search an
 
 ![overview](https://i.imgur.com/ogtczpA.png)
 
-
 ## Documents
 
 * [Slides](https://docs.google.com/presentation/d/1RFKX6dJT4-MdwvKA2gglTXy1VJumkVDHU-USJpGDllc/edit?usp=sharing)
@@ -16,7 +15,7 @@ This is the 3rd place solution to [ACM International Conference on Web Search an
 
 1. Clone this project.
 
-2. Download the datasets and extract them under the folder `zake7749/data/dataset`
+2. Download the dataset from [the corresponding competition on Kaggle](https://www.kaggle.com/c/fake-news-pair-classification-challenge/data) and extract it under the directory `zake7749/data/dataset`
 
 ```
 |-- dataset
